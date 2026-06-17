@@ -1,0 +1,10 @@
+to do 
+plan 
+1st we have to make fast ama order system at we have to make 5 to 6 at same time 
+2nd we have to make database management 
+ 1.we make chnage if order failed beacuse cod is not avalable thne put that id in table ( no cod )
+ 2. in useing of Imap search which order as get cancel and reson
+   i. Based on your past order activity and other actions on Amazon.in (put on id table (past order))
+   ii. We cannot complete this order because our records show that you have reached the purchase limit for this product. ( put on table (purchase limit) )
+   iii. Cancelled We are sorry there was an issue with your delivery.  ( table (issue with your delivery) )
+this is how we have to management table and there id's

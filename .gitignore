@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Debug HTML files (large files, not needed)
+debug_address_page.html
+debug_checkout_stage.html
+debug_payment_page.html
+debug_payment_submit_response.html
+
+# Logs
+logs/
+*.log
+
+# Sensitive / credentials - KEEP LOCAL ONLY
+credentials.json
+imap.json
+db_config.json
+cookies.json
+
+# Debug folder
+debug/
+
+# Scratch
+scratch/
