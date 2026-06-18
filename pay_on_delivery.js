@@ -5,6 +5,7 @@ const axios = require("axios");
 const puppeteer = require("puppeteer");
 const { sendAuthorizedRequest } = require("./request_helper");
 const cookiesHelper = require("./cookies");
+const googleSheets = require("./google_sheets");
 
 let db = null;
 if (fs.existsSync(path.join(__dirname, "db_config.json"))) {
@@ -324,6 +325,19 @@ async function runBrowserFallbackCheckout(email, confirm, checkoutUrl, minPrice,
 
   try {
     const page = await browser.newPage();
+    try {
+      const client = await page.target().createCDPSession();
+      await client.send('WebAuthn.enable');
+      await client.send('WebAuthn.addVirtualAuthenticator', {
+        config: {
+          protocol: 'ctap2',
+          transport: 'usb',
+          hasResidentKey: true,
+          hasUserVerification: true,
+          isUserVerified: true
+        }
+      });
+    } catch (_) {}
     await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36");
 
     const cookies = await cookiesHelper.readCookies(email);
@@ -488,18 +502,25 @@ async function runBrowserFallbackCheckout(email, confirm, checkoutUrl, minPrice,
       const pageContent = await page.content();
       if (/thankyou|thank-you|order-placed|orderPlaced/i.test(finalUrl + pageContent)) {
         console.log("\x1b[32m\n🎉 === ORDER PLACED SUCCESSFULLY WITH COD VIA BROWSER FALLBACK! ===\x1b[0m\n");
+        const orderIdMatch = pageContent.match(/\b\d{3}-\d{7}-\d{7}\b/);
+        const orderId = orderIdMatch ? orderIdMatch[0] : "UNKNOWN";
+        
+        // Save final cookies back
+        const finalCookies = await page.cookies();
+        await cookiesHelper.saveCookies(email, finalCookies);
+        console.log("Saved updated session cookies from browser fallback.");
+        return { success: true, orderId, orderTotal };
       } else {
         throw new Error(`Unexpected final page URL: ${finalUrl}`);
       }
     } else {
       console.log("\x1b[33m✅ Browser checkout simulation completed. Ready to place order. Run with --confirm-place-order.\x1b[0m");
+      // Save final cookies back
+      const finalCookies = await page.cookies();
+      await cookiesHelper.saveCookies(email, finalCookies);
+      console.log("Saved updated session cookies from browser fallback.");
+      return { success: true, orderId: "SIMULATION", orderTotal };
     }
-
-    // Save final cookies back
-    const finalCookies = await page.cookies();
-    await cookiesHelper.saveCookies(email, finalCookies);
-    console.log("Saved updated session cookies from browser fallback.");
-    return true;
 
   } catch (err) {
     if (err.message === "PRICE_CHECK_FAILED" || err.message === "COD_DISABLED") {
@@ -532,8 +553,23 @@ async function runFullBrowserCheckout(email, confirm, minPrice, maxPrice, headle
     });
 
     let page = null;
+    let orderTotal = 'UNKNOWN';
+    let orderId = 'UNKNOWN';
     try {
       page = await browser.newPage();
+      try {
+        const client = await page.target().createCDPSession();
+        await client.send('WebAuthn.enable');
+        await client.send('WebAuthn.addVirtualAuthenticator', {
+          config: {
+            protocol: 'ctap2',
+            transport: 'usb',
+            hasResidentKey: true,
+            hasUserVerification: true,
+            isUserVerified: true
+          }
+        });
+      } catch (_) {}
       await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36");
 
       const cookies = await cookiesHelper.readCookies(email);
@@ -750,7 +786,7 @@ async function runFullBrowserCheckout(email, confirm, minPrice, maxPrice, headle
                             await currentPage.$('input[name="placeYourOrder1"]') !== null;
           if (isSpcPage) {
             console.log("SPC/Review page reached. Extracting order total...");
-            const orderTotal = await currentPage.evaluate(() => {
+            orderTotal = await currentPage.evaluate(() => {
               const el = document.querySelector('[data-shimmer-target="ordertotals-amount"]') ||
                          document.querySelector('.grand-total-price') ||
                          document.querySelector('.a-color-price');
@@ -803,6 +839,8 @@ async function runFullBrowserCheckout(email, confirm, minPrice, maxPrice, headle
               const finalContent = await currentPage.content();
               if (/thankyou|thank-you|order-placed|orderPlaced/i.test(finalUrl + finalContent)) {
                 console.log("\x1b[32m\n🎉 === ORDER PLACED SUCCESSFULLY VIA BROWSER CHECKOUT! ===\x1b[0m\n");
+                const orderIdMatch = finalContent.match(/\b\d{3}-\d{7}-\d{7}\b/);
+                if (orderIdMatch) orderId = orderIdMatch[0];
                 completed = true;
                 break;
               } else {
@@ -814,6 +852,7 @@ async function runFullBrowserCheckout(email, confirm, minPrice, maxPrice, headle
                 console.log("Keeping browser open for 60 seconds to allow inspection...");
                 await new Promise(r => setTimeout(r, 60000));
               }
+              orderId = "SIMULATION";
               completed = true;
               break;
             }
@@ -838,7 +877,7 @@ async function runFullBrowserCheckout(email, confirm, minPrice, maxPrice, headle
       const finalCookies = await (pagesList[pagesList.length - 1] || page).cookies();
       await cookiesHelper.saveCookies(email, finalCookies);
       console.log("Saved updated session cookies from browser checkout.");
-      return true;
+      return { success: true, orderId, orderTotal };
 
     } catch (err) {
       if (err.message.includes("PRICE_CHECK_FAILED") || err.message === "COD_DISABLED" || err.message === "RELAUNCH_HEADED") {
@@ -849,7 +888,7 @@ async function runFullBrowserCheckout(email, confirm, minPrice, maxPrice, headle
         console.log("Keeping browser open for 15 seconds to allow inspection...");
         await new Promise(r => setTimeout(r, 15000));
       }
-      return false;
+      return { success: false, error: err.message };
     } finally {
       await browser.close();
     }
@@ -873,6 +912,7 @@ async function runPayOnDeliveryCheckout(email, confirm, headless = false) {
   if (!confirm) console.log("[SAFE MODE] Order will NOT be confirmed. Use --confirm-place-order to place the order.\n");
 
   let selectedPayment = false;
+  let finalOrderTotal = 'UNKNOWN';
 
   // ── 1. Cart page ──────────────────────────────────────────
   console.log("[1/5] Cart page...");
@@ -1116,6 +1156,7 @@ async function runPayOnDeliveryCheckout(email, confirm, headless = false) {
 
       const orderTotal = extractOrderTotal(pageHtml);
       if (orderTotal) {
+        finalOrderTotal = orderTotal;
         console.log(`\x1b[32m🛒 Order Total: ${orderTotal}\x1b[0m`);
       }
 
@@ -1176,7 +1217,7 @@ async function runPayOnDeliveryCheckout(email, confirm, headless = false) {
       if (!confirm) { 
         fs.writeFileSync(path.join(__dirname, "checkout_ready_to_place_order.html"), pageHtml,"utf8"); 
         console.log("\x1b[33m✅ Checkout simulation completed. Ready to place order. Run with --confirm-place-order.\x1b[0m"); 
-        return true; 
+        return { success: true, orderId: "SIMULATION", orderTotal: finalOrderTotal }; 
       }
       
       const por = await sendAuthorizedRequest({ method: "POST", url: poUrl, data: querystring.stringify(pof.inputs), headers: { "Content-Type": "application/x-www-form-urlencoded", Referer: currentUrl, Origin: "https://www.amazon.in" }, maxRedirects: 10, validateStatus: s => s >= 200 && s < 500 }, email);
@@ -1191,16 +1232,18 @@ async function runPayOnDeliveryCheckout(email, confirm, headless = false) {
       
       if (/thankyou|thank-you|order-placed|orderPlaced/i.test(currentUrl + pageHtml)) {
         console.log("\x1b[32m\n🎉 === ORDER PLACED SUCCESSFULLY WITH COD! ===\x1b[0m\n");
-        return true;
+        const orderIdMatch = pageHtml.match(/\b\d{3}-\d{7}-\d{7}\b/);
+        const orderId = orderIdMatch ? orderIdMatch[0] : "UNKNOWN";
+        return { success: true, orderId, orderTotal: finalOrderTotal };
       } else { 
         fs.writeFileSync(path.join(__dirname, "checkout_unexpected.html"), pageHtml,"utf8"); 
         console.warn("\x1b[33mUnexpected final page:", currentUrl, "— saved checkout_unexpected.html\x1b[0m"); 
-        return false;
+        return { success: false, error: `Unexpected final page URL: ${currentUrl}` };
       }
     }
     break;
   }
-  return false;
+  return { success: false, error: "Checkout loop completed without placing order" };
 }
 
 // ==================== MAIN ====================
@@ -1239,38 +1282,79 @@ Options:
   }
 
   try {
-    let success;
+    let result;
     if (config.browser) {
-      success = await runFullBrowserCheckout(email, config.confirm, minPriceOverride, maxPriceOverride, config.headless);
+      result = await runFullBrowserCheckout(email, config.confirm, minPriceOverride, maxPriceOverride, config.headless);
     } else {
       try {
-        success = await runPayOnDeliveryCheckout(email, config.confirm, config.headless);
+        result = await runPayOnDeliveryCheckout(email, config.confirm, config.headless);
       } catch (apiErr) {
         if (apiErr.message.includes("PRICE_CHECK_FAILED") || apiErr.message === "COD_DISABLED") {
           throw apiErr;
         }
         console.warn(`⚠️ API checkout encountered an error: ${apiErr.message}. Falling back to Puppeteer browser...`);
-        success = await runFullBrowserCheckout(email, config.confirm, minPriceOverride, maxPriceOverride, config.headless);
+        result = await runFullBrowserCheckout(email, config.confirm, minPriceOverride, maxPriceOverride, config.headless);
       }
-      if (!success) {
-        console.warn("⚠️ API checkout returned false. Falling back to Puppeteer browser...");
-        success = await runFullBrowserCheckout(email, config.confirm, minPriceOverride, maxPriceOverride, config.headless);
+      if (!result || !result.success) {
+        console.warn("⚠️ API checkout returned failure. Falling back to Puppeteer browser...");
+        result = await runFullBrowserCheckout(email, config.confirm, minPriceOverride, maxPriceOverride, config.headless);
       }
     }
-    if (!success) {
+
+    if (!result || !result.success) {
       console.error("\x1b[31m❌ Checkout failed.\x1b[0m");
+      const errorMsg = result ? result.error || 'Unknown error' : 'Checkout returned empty';
+      await googleSheets.updateAccountStatus(email, 'FAILED', errorMsg);
       process.exit(1);
     }
+
+    // Success path: Log to Google Sheets
+    if (config.confirm && result.orderId && result.orderId !== 'SIMULATION') {
+      // 1. Get products from cart_input.json
+      let productsStr = '';
+      const cartInputPath = path.join(__dirname, 'cart_input.json');
+      if (fs.existsSync(cartInputPath)) {
+        try {
+          const cartInput = JSON.parse(fs.readFileSync(cartInputPath, 'utf8'));
+          if (cartInput.products && Array.isArray(cartInput.products)) {
+            productsStr = cartInput.products.map(p => {
+              const asinMatch = p.asin.match(/\/dp\/([A-Z0-9]{10})\b/i) || p.asin.match(/\/d\/([A-Z0-9]{10})\b/i);
+              const asin = asinMatch ? asinMatch[1] : p.asin;
+              return `${asin} (Qty: ${p.quantity})`;
+            }).join(', ');
+          }
+        } catch (e) {}
+      }
+
+      // 2. Fetch current public IP address
+      let currentIp = 'UNKNOWN';
+      try {
+        const ipRes = await axios.get('https://api.ipify.org?format=json', { timeout: 3000 });
+        currentIp = ipRes.data.ip || 'UNKNOWN';
+      } catch (_) {}
+
+      // 3. Log to sheet
+      await googleSheets.appendOrderRow(email, 'SUCCESS', result.orderId, result.orderTotal || 'UNKNOWN', productsStr, '', currentIp);
+    }
+
     process.exit(0);
   } catch (err) {
+    let finalStatus = 'FAILED';
+    let reason = err.message;
+    
     if (err.message.includes("PRICE_CHECK_FAILED")) {
       console.error("\x1b[31m❌ Checkout Aborted: Price check validation failed.\x1b[0m");
+      finalStatus = 'PRICE_CHECK_FAILED';
     } else if (err.message === "COD_DISABLED") {
       console.error("\x1b[31m❌ Checkout Aborted: Cash on Delivery is disabled or unavailable.\x1b[0m");
+      finalStatus = 'NO_COD';
       await handleCodUnavailable(email, config.userId);
     } else {
       console.error(`\x1b[31m❌ Checkout error: ${err.message}\x1b[0m`);
     }
+
+    // Log failure to sheet
+    await googleSheets.updateAccountStatus(email, finalStatus, reason);
     process.exit(1);
   }
 }

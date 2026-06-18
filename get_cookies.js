@@ -3,6 +3,7 @@ const path = require("path");
 const puppeteer = require("puppeteer");
 const { ImapFlow } = require("imapflow");
 const cookiesHelper = require("./cookies");
+const googleSheets = require("./google_sheets");
 
 let db = null;
 if (fs.existsSync(path.join(__dirname, "db_config.json"))) {
@@ -789,6 +790,19 @@ async function main() {
       let page = null;
       try {
         page = await browser.newPage();
+        try {
+          const client = await page.target().createCDPSession();
+          await client.send('WebAuthn.enable');
+          await client.send('WebAuthn.addVirtualAuthenticator', {
+            config: {
+              protocol: 'ctap2',
+              transport: 'usb',
+              hasResidentKey: true,
+              hasUserVerification: true,
+              isUserVerified: true
+            }
+          });
+        } catch (_) {}
         await page.setUserAgent(USER_AGENT);
 
         // Inject existing cookies if present
@@ -1031,6 +1045,7 @@ async function main() {
 
         if (error.message.includes("PASSWORD_RESET_REQUIRED")) {
           console.log(`    🗑️ Password reset required detected for ${email}. Deleting account from database...`);
+          await googleSheets.updateAccountStatus(email, 'PASSWORD_RESET', 'Amazon password reset required');
           if (db) {
             try {
               await db.removeAccount(currentUserId, email);
@@ -1051,6 +1066,9 @@ async function main() {
         }
 
         console.error(`❌ Login flow failed for ${email}: ${error.message}`);
+        if (!error.message.includes("PASSWORD_RESET_REQUIRED")) {
+          await googleSheets.updateAccountStatus(email, 'LOGIN_FAILED', error.message);
+        }
         try {
           const debugDir = path.join(__dirname, "debug");
           if (!fs.existsSync(debugDir)) {

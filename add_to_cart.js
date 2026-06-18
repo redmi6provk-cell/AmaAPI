@@ -132,6 +132,19 @@ Examples:
 
   try {
     const page = await browser.newPage();
+    try {
+      const client = await page.target().createCDPSession();
+      await client.send('WebAuthn.enable');
+      await client.send('WebAuthn.addVirtualAuthenticator', {
+        config: {
+          protocol: 'ctap2',
+          transport: 'usb',
+          hasResidentKey: true,
+          hasUserVerification: true,
+          isUserVerified: true
+        }
+      });
+    } catch (_) {}
     await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36");
 
     const cookies = await cookiesHelper.readCookies(email);

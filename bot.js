@@ -629,7 +629,9 @@ async function sendPaginatedAccounts(chatId, page) {
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data;
-  bot.answerCallbackQuery(query.id);
+  bot.answerCallbackQuery(query.id).catch((err) => {
+    console.warn(`⚠️ Telegram Warning: Failed to answer callback query: ${err.message}`);
+  });
   
   if (!userState[chatId]) userState[chatId] = { step: null };
 

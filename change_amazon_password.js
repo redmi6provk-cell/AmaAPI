@@ -528,6 +528,19 @@ async function changePasswordForAccount(email, currentPassword, newPassword, ima
   });
 
   const page = await browser.newPage();
+  try {
+    const client = await page.target().createCDPSession();
+    await client.send('WebAuthn.enable');
+    await client.send('WebAuthn.addVirtualAuthenticator', {
+      config: {
+        protocol: 'ctap2',
+        transport: 'usb',
+        hasResidentKey: true,
+        hasUserVerification: true,
+        isUserVerified: true
+      }
+    });
+  } catch (_) {}
   await page.setUserAgent(USER_AGENT);
 
   try {

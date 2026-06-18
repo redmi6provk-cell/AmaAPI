@@ -6,6 +6,11 @@ debug_address_page.html
 debug_checkout_stage.html
 debug_payment_page.html
 debug_payment_submit_response.html
+checkout_ready_to_place_order.html
+checkout_unexpected.html
+*.html
+cart_response_*.json
+cart_response.json
 
 # Logs
 logs/
@@ -16,6 +21,8 @@ credentials.json
 imap.json
 db_config.json
 cookies.json
+google_credentials.json
+vps_imap_scanner/google_credentials.json
 
 # Debug folder
 debug/

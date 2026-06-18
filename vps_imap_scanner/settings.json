@@ -1,0 +1,11 @@
+{
+  "affiliateTag": "earnkaro09e_1192-21",
+  "adbPath": "C:\\Users\\ashu\\platform-tools\\adb.exe",
+  "ipRotation": {
+    "enabled": true,
+    "rotateEvery": 5,
+    "waitAirplaneOnSec": 4,
+    "waitReconnectSec": 30,
+    "maxRotations": 0
+  }
+}
