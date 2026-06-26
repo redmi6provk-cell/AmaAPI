@@ -59,6 +59,19 @@ function decodeQuotedPrintable(text) {
   return result;
 }
 
+async function getSingleMessageSource(client, msg) {
+  try {
+    for await (let singleMsg of client.fetch(msg.seq.toString(), { source: true })) {
+      if (singleMsg && singleMsg.source) {
+        return singleMsg.source.toString();
+      }
+    }
+  } catch (e) {
+    console.error("      ❌ Failed to fetch single email source:", e.message);
+  }
+  return "";
+}
+
 // ==================== OTP & APPROVAL LINK POLLING ====================
 function extractOtpFromEmail(rawEmail) {
   if (!rawEmail) return null;
@@ -188,11 +201,11 @@ async function fetchAmazonOtp(imapConfig, targetEmail) {
       const totalEmails = client.mailbox.exists;
       if (totalEmails === 0) return null;
       
-      const startRange = Math.max(1, totalEmails - 15);
+      const startRange = Math.max(1, totalEmails - 100);
       const range = `${startRange}:${totalEmails}`;
       
       const messages = [];
-      for await (let msg of client.fetch(range, { envelope: true, headers: true, source: true, flags: true })) {
+      for await (let msg of client.fetch(range, { envelope: true, headers: true, flags: true })) {
         messages.push(msg);
       }
       messages.sort((a, b) => b.seq - a.seq);
@@ -212,7 +225,7 @@ async function fetchAmazonOtp(imapConfig, targetEmail) {
         console.log(`    🔍 Found UNSEEN Amazon email: "${subject}" | Date: ${msg.envelope?.date} | Targeted: ${isTargeted}`);
         if (!isTargeted) continue;
 
-        const rawEmail = msg.source ? msg.source.toString() : "";
+        const rawEmail = await getSingleMessageSource(client, msg);
         const otp = extractOtpFromEmail(rawEmail);
         if (otp) {
           console.log(`    📧 Found OTP in UNSEEN email: "${subject}" for ${targetEmail}`);
@@ -245,7 +258,7 @@ async function fetchAmazonOtp(imapConfig, targetEmail) {
 
         if (!isTargeted) continue;
 
-        const rawEmail = msg.source ? msg.source.toString() : "";
+        const rawEmail = await getSingleMessageSource(client, msg);
         const otp = extractOtpFromEmail(rawEmail);
         if (otp) {
           console.log(`    📧 Found OTP in recent seen email: "${subject}" for ${targetEmail}`);
@@ -368,11 +381,11 @@ async function fetchAmazonApprovalLink(imapConfig, targetEmail) {
     const lock = await client.getMailboxLock("INBOX");
     try {
       const totalEmails = client.mailbox.exists;
-      const startRange = Math.max(1, totalEmails - 15);
+      const startRange = Math.max(1, totalEmails - 100);
       const range = `${startRange}:${totalEmails}`;
       
       const messages = [];
-      for await (let msg of client.fetch(range, { envelope: true, headers: true, source: true, flags: true })) {
+      for await (let msg of client.fetch(range, { envelope: true, headers: true, flags: true })) {
         messages.push(msg);
       }
       messages.sort((a, b) => b.seq - a.seq);
@@ -388,12 +401,15 @@ async function fetchAmazonApprovalLink(imapConfig, targetEmail) {
         const isAmazon = from.toLowerCase().includes("amazon") || subject.toLowerCase().includes("amazon");
         if (!isAmazon) continue;
 
-        if (!isEmailTargetedTo(msg, targetEmail)) continue;
+        const isTargeted = isEmailTargetedTo(msg, targetEmail);
+        console.log(`    🔍 Found UNSEEN Amazon email: "${subject}" | Date: ${msg.envelope?.date} | Targeted: ${isTargeted}`);
+        if (!isTargeted) continue;
 
-        const rawEmail = msg.source ? decodeQuotedPrintable(msg.source.toString()) : "";
+        const rawEmail = await getSingleMessageSource(client, msg);
+        const decodedRaw = decodeQuotedPrintable(rawEmail);
         
         // Search for approval URL in body
-        const match = rawEmail.match(/https:\/\/(?:www\.)?amazon\.(?:in|com)\/(?:ap\/cvf\/approval|co\/inline-approval|a\/c\/r)[^\s"'>\)]+/i);
+        const match = decodedRaw.match(/https:\/\/(?:www\.)?amazon\.(?:in|com)\/(?:ap\/cvf\/approval|co\/inline-approval|a\/c\/r)[^\s"'>\)]+/i);
         if (match) {
           const approvalLink = match[0].replace(/&amp;/g, '&');
           console.log(`    📧 Found Amazon approval link in UNSEEN email: "${subject}" -> Link: ${approvalLink}`);
@@ -404,7 +420,7 @@ async function fetchAmazonApprovalLink(imapConfig, targetEmail) {
         }
       }
 
-      // Pass 2: Look for Seen Amazon emails (last 2 minutes) targeted to our account
+      // Pass 2: Look for Seen Amazon emails (last 5 minutes) targeted to our account
       for (const msg of messages) {
         const from = msg.envelope?.from?.[0]?.address || "";
         const subject = msg.envelope?.subject || "";
@@ -416,22 +432,28 @@ async function fetchAmazonApprovalLink(imapConfig, targetEmail) {
         if (!isAmazon) continue;
 
         const date = msg.envelope?.date;
-        if (date && (Date.now() - new Date(date).getTime()) > 120000) {
+        const ageMs = date ? (Date.now() - new Date(date).getTime()) : 99999999;
+        const isTargeted = isEmailTargetedTo(msg, targetEmail);
+        console.log(`    🔍 Found SEEN Amazon email: "${subject}" | Age: ${Math.round(ageMs/1000)}s | Targeted: ${isTargeted}`);
+
+        if (ageMs > 300000) { // Skip if older than 5 minutes
           continue;
         }
 
-        if (!isEmailTargetedTo(msg, targetEmail)) continue;
+        if (!isTargeted) continue;
 
-        const rawEmail = msg.source ? decodeQuotedPrintable(msg.source.toString()) : "";
+        const rawEmail = await getSingleMessageSource(client, msg);
+        const decodedRaw = decodeQuotedPrintable(rawEmail);
         
         // Search for approval URL in body
-        const match = rawEmail.match(/https:\/\/(?:www\.)?amazon\.(?:in|com)\/(?:ap\/cvf\/approval|co\/inline-approval|a\/c\/r)[^\s"'>\)]+/i);
+        const match = decodedRaw.match(/https:\/\/(?:www\.)?amazon\.(?:in|com)\/(?:ap\/cvf\/approval|co\/inline-approval|a\/c\/r)[^\s"'>\)]+/i);
         if (match) {
           const approvalLink = match[0].replace(/&amp;/g, '&');
           console.log(`    📧 Found Amazon approval link in recent seen email: "${subject}" -> Link: ${approvalLink}`);
           return approvalLink;
         }
       }
+
     } finally {
       lock.release();
     }
