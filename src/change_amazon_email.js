@@ -1436,6 +1436,29 @@ async function main() {
   const args = process.argv.slice(2);
   const startHeadless = args.includes("--headless") || !args.includes("--browser");
 
+  // CLI Option for range: e.g. --range 1-20
+  const rangeIdx = args.indexOf("--range");
+  let rangeStart = 1;
+  let rangeEnd = pendingAccounts.length;
+  if (rangeIdx !== -1 && rangeIdx + 1 < args.length) {
+    const rangeMatch = args[rangeIdx + 1].match(/^(\d+)-(\d+)$/);
+    if (rangeMatch) {
+      rangeStart = parseInt(rangeMatch[1], 10);
+      rangeEnd = parseInt(rangeMatch[2], 10);
+    }
+  }
+
+  const startIdx = Math.max(0, rangeStart - 1);
+  const endIdx = Math.min(pendingAccounts.length, rangeEnd);
+  const slicedAccounts = pendingAccounts.slice(startIdx, endIdx);
+
+  console.log(`🎯 Applying range: ${rangeStart}-${rangeEnd}. Selected ${slicedAccounts.length} pending accounts to process.`);
+
+  if (slicedAccounts.length === 0) {
+    console.log("🎉 No pending accounts found in the specified range!");
+    process.exit(0);
+  }
+
   // CLI Options for IP rotation
   const rotateIdx = args.indexOf("--rotate-every");
   const rotateEvery = rotateIdx !== -1 && rotateIdx + 1 < args.length ? parseInt(args[rotateIdx + 1], 10) : 0;
@@ -1468,9 +1491,9 @@ async function main() {
 
   let processedSinceRotation = 0;
 
-  for (let i = 0; i < pendingAccounts.length; i++) {
-    const acc = pendingAccounts[i];
-    console.log(`\n💼 Account [${i + 1}/${pendingAccounts.length}]`);
+  for (let i = 0; i < slicedAccounts.length; i++) {
+    const acc = slicedAccounts[i];
+    console.log(`\n💼 Account [${i + 1}/${slicedAccounts.length}] (Overall Pending index: ${startIdx + i + 1})`);
     
     let success = false;
     try {
