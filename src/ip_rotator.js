@@ -72,6 +72,7 @@ function parseArgs() {
     headless: "true",
     browser: false,
     userId: 1,
+    table: "accounts",
     help: false,
   };
 
@@ -94,6 +95,7 @@ function parseArgs() {
       case "--headless":      config.headless = args[++i]; break;
       case "--browser":       config.browser = true; break;
       case "--user-id":       config.userId = parseInt(args[++i], 10) || 1; break;
+      case "--table":         config.table = args[++i]; break;
       case "--help": case "-h": config.help = true; break;
     }
   }
@@ -183,11 +185,20 @@ function runPipeline(email, config) {
     child.stdout.on("data", (d) => logStream.write(d));
     child.stderr.on("data", (d) => logStream.write(d));
 
-    child.on("close", (code) => {
+    child.on("close", async (code) => {
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
       logStream.end();
       if (code === 0) {
         console.log(`  ✅ [Pipeline] Done:    ${email} (${elapsed}s)`);
+        if (config.table !== "success_accounts") {
+          try {
+            const db = require("./db");
+            await db.moveAccount(email, config.userId, config.table || "accounts", "success_accounts");
+            console.log(`  🎉 [Database] Moved ${email} to success_accounts`);
+          } catch (dbErr) {
+            console.warn(`  ⚠️  [Database] Failed to move successful account ${email}:`, dbErr.message);
+          }
+        }
         resolve({ email, success: true, elapsed });
       } else {
         console.log(`  ❌ [Pipeline] Failed:  ${email} (exit ${code}, ${elapsed}s)`);

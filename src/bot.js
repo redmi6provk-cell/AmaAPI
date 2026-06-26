@@ -237,10 +237,15 @@ function runModularScript(chatId, cmdArgs, accountRange, tableName = 'accounts')
     }
     args.push("--browser");
   } else if (verb1 === "full-checkout") {
-    scriptName = "pipeline.js";
+    scriptName = "ip_rotator.js";
     if (cmdArgs.includes("--confirm-place-order")) {
       args.push("--confirm-place-order");
     }
+    // Set rotator settings to cycle after 3 accounts and run sequentially (concurrency 1)
+    args.push("--rotate-every", "3");
+    args.push("--concurrency", "1");
+    // Pass the source table name so rotator knows where to move successful accounts from
+    args.push("--table", tableName);
   } else if (verb1 === "login") {
     scriptName = "get_cookies.js";
   } else {
@@ -310,6 +315,15 @@ function runModularScript(chatId, cmdArgs, accountRange, tableName = 'accounts')
     if (selectedEmails.length === 0) {
       bot.sendMessage(chatId, `❌ No accounts resolved for range: ${accountRange}`);
       return;
+    }
+
+    // Intercept emails for ip_rotator.js so it runs as a single process orchestrator
+    if (scriptName === "ip_rotator.js") {
+      const validEmails = selectedEmails.filter(Boolean);
+      if (validEmails.length > 0) {
+        args.push("--emails", validEmails.join(","));
+      }
+      selectedEmails = [null]; // Collapse list so bot.js executes ip_rotator.js once
     }
 
     if (selectedEmails.length > 1) {
