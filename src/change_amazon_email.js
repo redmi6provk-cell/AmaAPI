@@ -208,7 +208,9 @@ async function fetchAmazonOtp(imapConfig, targetEmail) {
         const isAmazon = from.toLowerCase().includes("amazon") || subject.toLowerCase().includes("amazon");
         if (!isAmazon) continue;
 
-        if (!isEmailTargetedTo(msg, targetEmail)) continue;
+        const isTargeted = isEmailTargetedTo(msg, targetEmail);
+        console.log(`    🔍 Found UNSEEN Amazon email: "${subject}" | Date: ${msg.envelope?.date} | Targeted: ${isTargeted}`);
+        if (!isTargeted) continue;
 
         const rawEmail = msg.source ? msg.source.toString() : "";
         const otp = extractOtpFromEmail(rawEmail);
@@ -221,7 +223,7 @@ async function fetchAmazonOtp(imapConfig, targetEmail) {
         }
       }
 
-      // Pass 2: Look for Seen Amazon emails (last 2 minutes) targeted to our account
+      // Pass 2: Look for Seen Amazon emails (last 5 minutes) targeted to our account
       for (const msg of messages) {
         const from = msg.envelope?.from?.[0]?.address || "";
         const subject = msg.envelope?.subject || "";
@@ -233,11 +235,15 @@ async function fetchAmazonOtp(imapConfig, targetEmail) {
         if (!isAmazon) continue;
 
         const date = msg.envelope?.date;
-        if (date && (Date.now() - new Date(date).getTime()) > 120000) {
+        const ageMs = date ? (Date.now() - new Date(date).getTime()) : 99999999;
+        const isTargeted = isEmailTargetedTo(msg, targetEmail);
+        console.log(`    🔍 Found SEEN Amazon email: "${subject}" | Age: ${Math.round(ageMs/1000)}s | Targeted: ${isTargeted}`);
+
+        if (ageMs > 300000) { // Skip if older than 5 minutes
           continue;
         }
 
-        if (!isEmailTargetedTo(msg, targetEmail)) continue;
+        if (!isTargeted) continue;
 
         const rawEmail = msg.source ? msg.source.toString() : "";
         const otp = extractOtpFromEmail(rawEmail);
@@ -256,8 +262,8 @@ async function fetchAmazonOtp(imapConfig, targetEmail) {
   return null;
 }
 
-async function pollForAmazonOtp(imapConfig, targetEmail, timeoutMs = 120000, intervalMs = 4000) {
-  console.log(`    ⏳ Checking IMAP inbox for Amazon OTP sent to ${targetEmail}...`);
+async function pollForAmazonOtp(imapConfig, targetEmail, timeoutMs = 180000, intervalMs = 4000) {
+  console.log(`    ⏳ Checking IMAP inbox for Amazon OTP sent to ${targetEmail} (Timeout: ${timeoutMs/1000}s)...`);
   const startTime = Date.now();
   while (Date.now() - startTime < timeoutMs) {
     const otp = await fetchAmazonOtp(imapConfig, targetEmail);
