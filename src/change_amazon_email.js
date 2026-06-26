@@ -205,7 +205,7 @@ async function fetchAmazonOtp(imapConfig, targetEmail) {
       const range = `${startRange}:${totalEmails}`;
       
       const messages = [];
-      for await (let msg of client.fetch(range, { envelope: true, headers: true, flags: true })) {
+      for await (let msg of client.fetch(range, { envelope: true, headers: true, flags: true, source: true })) {
         messages.push(msg);
       }
       messages.sort((a, b) => b.seq - a.seq);
@@ -385,7 +385,7 @@ async function fetchAmazonApprovalLink(imapConfig, targetEmail) {
       const range = `${startRange}:${totalEmails}`;
       
       const messages = [];
-      for await (let msg of client.fetch(range, { envelope: true, headers: true, flags: true })) {
+      for await (let msg of client.fetch(range, { envelope: true, headers: true, flags: true, source: true })) {
         messages.push(msg);
       }
       messages.sort((a, b) => b.seq - a.seq);
@@ -647,7 +647,7 @@ async function safeClick(page, selector, label = "") {
 // ==================== LOGIN FLOW ====================
 async function runLoginFlowIfNeeded(page, email, currentPassword, imapConfig, startHeadless) {
   let attempts = 0;
-  let triedPasswords = [currentPassword, "112233"];
+  let triedPasswords = ["112233", currentPassword].filter((p, i, arr) => p && arr.indexOf(p) === i);
   let passwordIdx = 0;
   let lastApprovedLink = "";
 
