@@ -4,7 +4,7 @@ const { ImapFlow } = require("imapflow");
 const googleSheets = require("./google_sheets");
 
 let db = null;
-if (fs.existsSync(path.join(__dirname, "db_config.json"))) {
+if (fs.existsSync(path.join(__dirname, "..", "config", "db_config.json"))) {
   try {
     db = require("./db");
   } catch (e) {

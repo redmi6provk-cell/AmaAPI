@@ -2,8 +2,8 @@ const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
 
-const CREDENTIALS_PATH = path.join(__dirname, 'google_credentials.json');
-const SETTINGS_PATH = path.join(__dirname, 'settings.json');
+const CREDENTIALS_PATH = path.join(__dirname, '..', 'config', 'google_credentials.json');
+const SETTINGS_PATH = path.join(__dirname, '..', 'config', 'settings.json');
 
 // Get Spreadsheet ID from settings.json
 let spreadsheetId = null;

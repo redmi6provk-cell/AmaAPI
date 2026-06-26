@@ -2,7 +2,7 @@ module.exports = {
   apps: [
     {
       name: "imap-scanner",          // PM2 process name
-      script: "imap_search.js",      // File to run
+      script: "src/imap_search.js",      // File to run
       args: "--loop",                // Enable loop mode
       cwd: "./",                     // Working directory (same folder)
       instances: 1,                  // Only 1 instance

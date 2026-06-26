@@ -17,12 +17,16 @@ logs/
 *.log
 
 # Sensitive / credentials - KEEP LOCAL ONLY
-credentials.json
-imap.json
-db_config.json
-cookies.json
-google_credentials.json
-vps_imap_scanner/google_credentials.json
+**/credentials.json
+**/imap.json
+**/db_config.json
+**/cookies.json
+**/google_credentials.json
+**/settings.json
+**/bulk_emails.txt
+data/
+db_export/
+**/db_export/
 
 # Debug folder
 debug/

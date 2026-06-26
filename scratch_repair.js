@@ -1,49 +1,8 @@
 const fs = require("fs");
 const path = require("path");
 const { ImapFlow } = require("imapflow");
-const googleSheets = require("./google_sheets");
-
-let db = null;
-if (fs.existsSync(path.join(__dirname, "db_config.json"))) {
-  try {
-    db = require("./db");
-  } catch (e) {
-    console.warn("⚠️ Could not load database module in imap_search.js:", e.message);
-  }
-}
-
-// Helper to decode quoted-printable encoding in emails
-function decodeQuotedPrintable(str) {
-  if (!str) return "";
-  return str
-    .replace(/=\r?\n/g, '') // Remove soft line breaks
-    .replace(/=([0-9A-F]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
-}
-
-// Extract order ID by checking subject first, then body (avoiding headers)
-function extractOrderId(subject, rawEmailBody) {
-  // 1. Try matching in the decoded subject first (cleanest and most specific)
-  if (subject) {
-    const match = subject.match(/\b\d{3}-\d{7}-\d{7}\b/);
-    if (match) return match[0];
-  }
-
-  // 2. Fallback: search only within the body of the email, avoiding headers
-  if (rawEmailBody) {
-    let bodyOnly = rawEmailBody;
-    const parts = rawEmailBody.split(/\r?\n\r?\n/);
-    if (parts.length > 1) {
-      bodyOnly = parts.slice(1).join("\n");
-    }
-
-    // Decode quoted-printable in the body to handle any soft wraps or hex encoding
-    const decodedBody = decodeQuotedPrintable(bodyOnly);
-    const match = decodedBody.match(/\b\d{3}-\d{7}-\d{7}\b/);
-    if (match) return match[0];
-  }
-
-  return "UNKNOWN";
-}
+const googleSheets = require("./src/google_sheets");
+const db = require("./src/db");
 
 // Helper to normalize and get base email (ignoring Gmail plus-addressing aliases)
 function getBaseEmail(email) {
@@ -93,6 +52,39 @@ function getRecipientEmails(msg) {
   return [...new Set(recipients)];
 }
 
+// Helper to decode quoted-printable encoding in emails
+function decodeQuotedPrintable(str) {
+  if (!str) return "";
+  return str
+    .replace(/=\r?\n/g, '') // Remove soft line breaks
+    .replace(/=([0-9A-F]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+}
+
+// Extract order ID by checking subject first, then body (avoiding headers)
+function extractOrderId(subject, rawEmailBody) {
+  // 1. Try matching in the decoded subject first (cleanest and most specific)
+  if (subject) {
+    const match = subject.match(/\b\d{3}-\d{7}-\d{7}\b/);
+    if (match) return match[0];
+  }
+
+  // 2. Fallback: search only within the body of the email, avoiding headers
+  if (rawEmailBody) {
+    let bodyOnly = rawEmailBody;
+    const parts = rawEmailBody.split(/\r?\n\r?\n/);
+    if (parts.length > 1) {
+      bodyOnly = parts.slice(1).join("\n");
+    }
+
+    // Decode quoted-printable in the body to handle any soft wraps or hex encoding
+    const decodedBody = decodeQuotedPrintable(bodyOnly);
+    const match = decodedBody.match(/\b\d{3}-\d{7}-\d{7}\b/);
+    if (match) return match[0];
+  }
+
+  return "UNKNOWN";
+}
+
 // Find which table the account is currently in
 async function findAccountTable(email, userId) {
   const tables = ['accounts', 'success_accounts', 'no_cod_accounts', 'past_order', 'delivery_issue', 'purchase_limit'];
@@ -106,8 +98,8 @@ async function findAccountTable(email, userId) {
   return null;
 }
 
-// Process a single user's IMAP mailbox
-async function processUserImap(userId, imapConfig) {
+// Process a single user's IMAP mailbox for repair
+async function repairUserImap(userId, imapConfig, startTime) {
   if (!imapConfig || !imapConfig.host || !imapConfig.user || !imapConfig.password) {
     console.log(`⚠️ User ${userId} missing complete IMAP configuration. Skipping.`);
     return;
@@ -154,9 +146,12 @@ async function processUserImap(userId, imapConfig) {
         envelopes.push(msg);
       }
 
-      // Step 2: Filter for emails that are from Amazon and received today
+      // Step 2: Filter for emails that are from Amazon and received since start time
       const targetSeqNums = [];
       for (const msg of envelopes) {
+        const emailDate = msg.envelope?.date;
+        if (!emailDate || emailDate < startTime) continue;
+
         const from = msg.envelope?.from?.[0]?.address || "";
         const subject = msg.envelope?.subject || "";
         const isAmazon = from.toLowerCase().includes("amazon.in") || 
@@ -168,7 +163,7 @@ async function processUserImap(userId, imapConfig) {
         }
       }
 
-      console.log(` Found ${targetSeqNums.length} Amazon email(s) today. Fetching full content...`);
+      console.log(` Found ${targetSeqNums.length} Amazon email(s) since ${startTime.toLocaleTimeString()}. Fetching full content...`);
 
       if (targetSeqNums.length === 0) {
         console.log(" Done processing user. No Amazon emails today.");
@@ -197,6 +192,14 @@ async function processUserImap(userId, imapConfig) {
       let countProcessed = 0;
 
       for (const msg of messages) {
+        const emailDate = msg.envelope?.date;
+        if (!emailDate) continue;
+        
+        // Skip emails received before the start time
+        if (emailDate < startTime) {
+          continue;
+        }
+
         const from = msg.envelope?.from?.[0]?.address || "";
         const subject = msg.envelope?.subject || "";
         
@@ -242,39 +245,48 @@ async function processUserImap(userId, imapConfig) {
         }
 
         if (cancellationType) {
-          // Extract order ID using helper function
+          // Extract order ID using the new robust helper function
           const orderId = extractOrderId(subject, rawEmailBody);
 
-          console.log(` 🔍 Found Cancellation Email for ${matchedDbAccount.email}:`);
-          console.log(`   Order ID: ${orderId}`);
+          console.log(`\n🔍 Found Cancellation Email (Date: ${emailDate.toLocaleString('en-IN')}) for ${matchedDbAccount.email}:`);
+          console.log(`   Correct Order ID: ${orderId}`);
           console.log(`   Reason: ${matchedReasonText}`);
 
-          // Update the order status to CANCELLED in the Google Sheet instead of deleting it
+          if (orderId === "UNKNOWN") {
+            console.log(`   ⚠️ Could not extract order ID. Skipping.`);
+            continue;
+          }
+
+          // Update the order status in Google Sheets
+          console.log(`   📊 Updating Google Sheet...`);
           await googleSheets.updateOrderStatus(matchedDbAccount.email, orderId, 'CANCELLED', matchedReasonText);
 
+          // Update the database record
           const currentTable = await findAccountTable(matchedDbAccount.email, userId);
           if (currentTable) {
-            if (currentTable === cancellationType) {
-              // Already in correct table, update metadata if needed
+            console.log(`   🗄️ Account is in '${currentTable}' database table.`);
+            if (['past_order', 'delivery_issue', 'purchase_limit'].includes(currentTable)) {
+              // Update order_id and reason_text in database
               await db.pool.query(
-                `UPDATE ${cancellationType} SET order_id = $1, reason_text = $2, updated_at = CURRENT_TIMESTAMP WHERE user_id = $3 AND email = $4`,
+                `UPDATE ${currentTable} SET order_id = $1, reason_text = $2, updated_at = CURRENT_TIMESTAMP WHERE user_id = $3 AND email = $4`,
                 [orderId, matchedReasonText, userId, matchedDbAccount.email]
               );
-              console.log(`   ℹ️ Account already in ${cancellationType} table, updated metadata.`);
+              console.log(`   ✅ Database updated successfully.`);
             } else {
-              // Move to new table preserving cookies
+              // If it's currently in success_accounts, move it to the cancellation table
+              console.log(`   🗄️ Moving account from ${currentTable} to ${cancellationType}...`);
               await db.moveAccount(matchedDbAccount.email, userId, currentTable, cancellationType, {
                 order_id: orderId,
                 reason_text: matchedReasonText
               });
-              console.log(`   ✅ Successfully moved account from ${currentTable} to ${cancellationType}.`);
+              console.log(`   ✅ Account moved successfully.`);
             }
             countProcessed++;
           }
         }
       }
 
-      console.log(` Done processing user ${userId}. Processed ${countProcessed} cancellation(s).`);
+      console.log(` Done processing user ${userId}. Repaired ${countProcessed} cancellation(s).`);
 
     } finally {
       lock.release();
@@ -286,80 +298,30 @@ async function processUserImap(userId, imapConfig) {
   }
 }
 
-// Main execution function
 async function main() {
-  if (!db) {
-    console.error("❌ Database module not loaded. Cannot run search.");
-    process.exit(1);
-  }
-
-  // Parse arguments
-  const args = process.argv.slice(2);
-  let targetUserId = null;
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--user-id") {
-      targetUserId = parseInt(args[++i], 10) || null;
-    }
-  }
+  const startTime = new Date("2026-06-24T12:33:00+05:30");
+  console.log(`⚙️ Starting Repair Script...`);
+  console.log(`🕒 Scanning emails SINCE: ${startTime.toLocaleString('en-IN')}\n`);
 
   try {
     await db.initDB();
-
-    if (targetUserId) {
-      const user = await db.getUser(targetUserId);
-      if (user) {
-        await processUserImap(user.id, user.imapConfig);
-      } else {
-        console.error(`❌ User ID ${targetUserId} not found in database.`);
-      }
-    } else {
-      // Process all users in database
-      const users = await db.getAllUsers();
-      if (users.length === 0) {
-        console.log("ℹ️ No users found in database.");
-      }
-      for (const u of users) {
-        const userDetails = await db.getUser(u.id);
-        if (userDetails && userDetails.imapConfig && userDetails.imapConfig.host) {
-          await processUserImap(userDetails.id, userDetails.imapConfig);
-        }
+    const users = await db.getAllUsers();
+    if (users.length === 0) {
+      console.log("ℹ️ No users found in database.");
+    }
+    for (const u of users) {
+      const userDetails = await db.getUser(u.id);
+      if (userDetails && userDetails.imapConfig && userDetails.imapConfig.host) {
+        await repairUserImap(userDetails.id, userDetails.imapConfig, startTime);
       }
     }
-
   } catch (err) {
-    console.error("❌ Main execution failed:", err.message);
-    // Do NOT call pool.end() here — pool stays alive for next loop run
+    console.error("❌ Repair failed:", err.message);
+  } finally {
+    console.log("\n🧹 Closing database connection...");
+    await db.pool.end().catch(() => {});
+    console.log("🏁 Done.");
   }
 }
 
-// ==================== POLLING LOOP ====================
-// Interval in milliseconds (default: 30 minutes)
-const POLL_INTERVAL_MS = parseInt(process.env.IMAP_POLL_INTERVAL_MS || "") || 30 * 60 * 1000;
-
-async function runLoop() {
-  console.log("🚀 IMAP Scanner started (PM2 mode)");
-  console.log(`🔁 Will scan every ${POLL_INTERVAL_MS / 60000} minute(s)`);
-
-  // Run immediately on start
-  await main();
-
-  // Then repeat on interval
-  setInterval(async () => {
-    console.log(`\n⏰ [${new Date().toISOString()}] Starting scheduled IMAP scan...`);
-    await main();
-  }, POLL_INTERVAL_MS);
-}
-
-// Run script if called directly
-if (require.main === module) {
-  const args = process.argv.slice(2);
-  if (args.includes("--loop") || process.env.IMAP_LOOP === "true") {
-    // LOOP MODE: pool stays open forever, no pool.end()
-    runLoop();
-  } else {
-    // SINGLE RUN MODE: close pool after done
-    main().finally(() => {
-      db && db.pool.end().catch(() => {});
-    });
-  }
-}
+main();
