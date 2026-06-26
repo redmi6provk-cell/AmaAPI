@@ -1342,23 +1342,42 @@ async function main() {
   // Load User 1 IMAP Config (for login approvals)
   let loginImapConfig = null;
   let user1AmazonPassword = null;
-  const usersJsonPath = path.join(__dirname, "..", "db_export", "users.json");
-  if (fs.existsSync(usersJsonPath)) {
+
+  // Try to load from Database first if db helper is configured
+  if (db) {
     try {
-      const users = JSON.parse(fs.readFileSync(usersJsonPath, "utf8"));
-      const u1 = users.find(u => u.id === 1);
+      const u1 = await db.getUser(1);
       if (u1) {
-        loginImapConfig = {
-          host: u1.imap_host,
-          port: u1.imap_port,
-          secure: u1.imap_secure,
-          user: u1.imap_user,
-          password: u1.imap_password
-        };
-        user1AmazonPassword = u1.amazon_password;
+        loginImapConfig = u1.imapConfig;
+        user1AmazonPassword = u1.amazonPassword;
+        console.log(`ℹ️ Successfully loaded User 1 IMAP configuration from Database (VPS/Local).`);
       }
-    } catch (e) {
-      console.error("Error reading users.json:", e.message);
+    } catch (dbErr) {
+      console.warn("⚠️ Failed to load User 1 from database:", dbErr.message);
+    }
+  }
+
+  // Fallback: Try to load from db_export/users.json if database fetch failed or was not configured
+  if (!loginImapConfig || !user1AmazonPassword) {
+    const usersJsonPath = path.join(__dirname, "..", "db_export", "users.json");
+    if (fs.existsSync(usersJsonPath)) {
+      try {
+        const users = JSON.parse(fs.readFileSync(usersJsonPath, "utf8"));
+        const u1 = users.find(u => u.id === 1);
+        if (u1) {
+          loginImapConfig = {
+            host: u1.imap_host,
+            port: u1.imap_port,
+            secure: u1.imap_secure,
+            user: u1.imap_user,
+            password: u1.imap_password
+          };
+          user1AmazonPassword = u1.amazon_password;
+          console.log(`ℹ️ Loaded User 1 IMAP configuration from local users.json fallback.`);
+        }
+      } catch (e) {
+        console.error("Error reading users.json:", e.message);
+      }
     }
   }
 
