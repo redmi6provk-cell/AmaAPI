@@ -1160,7 +1160,7 @@ async function processEmailChange(email, targetEmail, amazonPassword, loginImapC
     ]);
 
     console.log(`    🔑 Polling OTP for new email: ${targetEmail}`);
-    const changeOtp = await pollForAmazonOtp(newEmailImapConfig, targetEmail);
+    const changeOtp = await pollForAmazonOtp(page, newEmailImapConfig, targetEmail);
     if (!changeOtp) {
       throw new Error(`Failed to retrieve email verification OTP for ${targetEmail}`);
     }
