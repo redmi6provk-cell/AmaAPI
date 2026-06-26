@@ -262,10 +262,28 @@ async function fetchAmazonOtp(imapConfig, targetEmail) {
   return null;
 }
 
-async function pollForAmazonOtp(imapConfig, targetEmail, timeoutMs = 180000, intervalMs = 4000) {
+async function pollForAmazonOtp(page, imapConfig, targetEmail, timeoutMs = 180000, intervalMs = 4000) {
   console.log(`    ⏳ Checking IMAP inbox for Amazon OTP sent to ${targetEmail} (Timeout: ${timeoutMs/1000}s)...`);
   const startTime = Date.now();
   while (Date.now() - startTime < timeoutMs) {
+    // Check if OTP field is still visible on the page
+    const otpFieldExists = await page.evaluate(() => {
+      const otpSelectors = [
+        "#input-box-otp", "#auth-mfa-otpcode", "#cvf-widget-input-code", "#cvf-input-code",
+        "input[name='otpCode']", "input[name='code']", "input#cvf-a-input", "#cvf-otp-input", ".cvf-widget-input-code"
+      ];
+      for (const sel of otpSelectors) {
+        const el = document.querySelector(sel);
+        if (el && el.offsetParent !== null) return true;
+      }
+      return false;
+    }).catch(() => false);
+
+    if (!otpFieldExists) {
+      console.log("    ℹ️ OTP field is no longer visible on the browser page. Stopping IMAP poll.");
+      return null;
+    }
+
     const otp = await fetchAmazonOtp(imapConfig, targetEmail);
     if (otp) return otp;
     await new Promise(r => setTimeout(r, intervalMs));
@@ -278,7 +296,7 @@ async function handleOtpInput(page, selector, imapConfig, targetEmail) {
   let autoFetched = false;
 
   if (imapConfig && imapConfig.user) {
-    const otp = await pollForAmazonOtp(imapConfig, targetEmail);
+    const otp = await pollForAmazonOtp(page, imapConfig, targetEmail);
     if (otp) {
       console.log(`    ✅ Auto-fetched OTP: ${otp}. Entering...`);
       await page.evaluate((sel) => {
