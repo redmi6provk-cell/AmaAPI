@@ -82,8 +82,8 @@ async function main() {
     if (!trimmed || trimmed.startsWith('#')) {
       continue;
     }
-    // Convert gmail.com to kanuvk.com
-    const converted = trimmed.replace(/@gmail\.com$/i, '@kanuvk.com');
+    // Convert gmail.com to kanuvk.com (removing + sign to match change_amazon_email.js)
+    const converted = trimmed.replace(/\+/, "").replace(/@gmail\.com$/i, '@kanuvk.com');
     if (converted.includes('@')) {
       newEmails.push(converted);
     }
