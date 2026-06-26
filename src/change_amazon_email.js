@@ -1339,21 +1339,28 @@ async function main() {
     process.exit(1);
   }
 
-  // Load User 1 IMAP Config (for login approvals)
+  // Parse CLI args to get --user-id
+  const argsTemp = process.argv.slice(2);
+  const userIdxTemp = argsTemp.indexOf("--user-id");
+  const targetUserId = userIdxTemp !== -1 && userIdxTemp + 1 < argsTemp.length ? parseInt(argsTemp[userIdxTemp + 1], 10) : 1;
+
+  console.log(`ℹ️ Target User ID: ${targetUserId}`);
+
+  // Load Target User IMAP Config (for login approvals)
   let loginImapConfig = null;
   let user1AmazonPassword = null;
 
   // Try to load from Database first if db helper is configured
   if (db) {
     try {
-      const u1 = await db.getUser(1);
+      const u1 = await db.getUser(targetUserId);
       if (u1) {
         loginImapConfig = u1.imapConfig;
         user1AmazonPassword = u1.amazonPassword;
-        console.log(`ℹ️ Successfully loaded User 1 IMAP configuration from Database (VPS/Local).`);
+        console.log(`ℹ️ Successfully loaded User ${targetUserId} IMAP configuration from Database (VPS/Local).`);
       }
     } catch (dbErr) {
-      console.warn("⚠️ Failed to load User 1 from database:", dbErr.message);
+      console.warn(`⚠️ Failed to load User ${targetUserId} from database:`, dbErr.message);
     }
   }
 
@@ -1363,7 +1370,7 @@ async function main() {
     if (fs.existsSync(usersJsonPath)) {
       try {
         const users = JSON.parse(fs.readFileSync(usersJsonPath, "utf8"));
-        const u1 = users.find(u => u.id === 1);
+        const u1 = users.find(u => u.id === targetUserId);
         if (u1) {
           loginImapConfig = {
             host: u1.imap_host,
@@ -1373,7 +1380,7 @@ async function main() {
             password: u1.imap_password
           };
           user1AmazonPassword = u1.amazon_password;
-          console.log(`ℹ️ Loaded User 1 IMAP configuration from local users.json fallback.`);
+          console.log(`ℹ️ Loaded User ${targetUserId} IMAP configuration from local users.json fallback.`);
         }
       } catch (e) {
         console.error("Error reading users.json:", e.message);
@@ -1382,7 +1389,7 @@ async function main() {
   }
 
   if (!loginImapConfig || !loginImapConfig.user || !loginImapConfig.password) {
-    console.error("❌ Error: Could not load User 1 IMAP configuration from users.json");
+    console.error(`❌ Error: Could not load User ${targetUserId} IMAP configuration from database or users.json`);
     process.exit(1);
   }
 
@@ -1399,7 +1406,7 @@ async function main() {
   console.log(`ℹ️ Using vkkykh@kanuvk.com IMAP for 2nd OTP (email verification emails).`);
 
   if (!user1AmazonPassword) {
-    console.error("❌ Error: Could not load User 1 Amazon Password from users.json");
+    console.error(`❌ Error: Could not load User ${targetUserId} Amazon Password from database or users.json`);
     process.exit(1);
   }
 
