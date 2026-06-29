@@ -94,22 +94,35 @@ function waitForAdbDevice(timeoutMs = 30000) {
  */
 async function checkAdbStatus() {
   if (!ADB) {
-    return { adbFound: false, deviceConnected: false, deviceId: null };
+    return { adbFound: false, deviceConnected: false, deviceId: null, state: null };
   }
 
   try {
     const output = await runAdb("devices");
-    const lines = output.split("\n").filter((l) => l.trim() && !l.startsWith("List of devices"));
-    const connectedDevices = lines.filter((l) => l.includes("device") && !l.includes("offline"));
+    const lines = output.split("\n")
+      .map(l => l.trim())
+      .filter((l) => l && !l.startsWith("List of devices") && !l.startsWith("* daemon"));
 
-    if (connectedDevices.length === 0) {
-      return { adbFound: true, deviceConnected: false, deviceId: null };
+    if (lines.length === 0) {
+      return { adbFound: true, deviceConnected: false, deviceId: null, state: null };
     }
 
-    const deviceId = connectedDevices[0].split("\t")[0].trim();
-    return { adbFound: true, deviceConnected: true, deviceId };
+    const firstDeviceLine = lines[0];
+    const parts = firstDeviceLine.split(/\s+/);
+    if (parts.length >= 2) {
+      const deviceId = parts[0];
+      const state = parts[1]; // e.g. "device", "unauthorized", "offline"
+      return { 
+        adbFound: true, 
+        deviceConnected: state === "device", 
+        deviceId, 
+        state 
+      };
+    }
+
+    return { adbFound: true, deviceConnected: false, deviceId: null, state: null };
   } catch (err) {
-    return { adbFound: true, deviceConnected: false, deviceId: null, error: err.message };
+    return { adbFound: true, deviceConnected: false, deviceId: null, error: err.message, state: null };
   }
 }
 

@@ -239,7 +239,13 @@ async function main() {
     if (status.adbFound && status.deviceConnected) {
       console.log(`📱 ADB device connected — IP rotation har ${ROTATE_EVERY} emails pe hogi`);
     } else {
-      console.log('⚠️  ADB device nahi mila — IP rotation disabled (script chalti rahegi)');
+      if (status.state === 'unauthorized') {
+        console.warn(`⚠️  ADB device connected but UNAUTHORIZED! Please allow USB debugging on your phone.`);
+      } else if (status.state === 'offline') {
+        console.warn(`⚠️  ADB device is OFFLINE! Try reconnecting the USB cable.`);
+      } else {
+        console.log('⚠️  ADB device nahi mila — IP rotation disabled (script chalti rahegi)');
+      }
       adb = null; // disable rotation
     }
   } else {
@@ -249,6 +255,7 @@ async function main() {
   // ── Browser launch ──
   let { browser, page } = await makeBrowser();
 
+  let processedSinceRotation = 0;
   for (let i = startIndex; i < emails.length; i++) {
     const email = emails[i];
     const idx   = String(i + 1).padStart(3, '0');
@@ -296,9 +303,9 @@ async function main() {
 
     // ── IP Rotation ──
     // Har ROTATE_EVERY emails ke baad airplane mode toggle karo
-    const emailsDone = i - startIndex + 1; // is run mein kitni emails process hui
-    if (adb && emailsDone % ROTATE_EVERY === 0 && i < emails.length - 1) {
-      console.log(`\n  ✈️  [IP Rotation] ${emailsDone} emails done — IP change kar raha hoon...`);
+    processedSinceRotation++;
+    if (adb && processedSinceRotation >= ROTATE_EVERY && i < emails.length - 1) {
+      console.log(`\n  ✈️  [IP Rotation] Reached limit of ${ROTATE_EVERY} emails — IP change kar raha hoon...`);
       try {
         await adb.enableAirplaneMode();
         await sleep(4000); // phone airplane mode ON ho jaye
@@ -309,6 +316,7 @@ async function main() {
           if (newIp) console.log(`  🌐 Naya IP: ${newIp}`);
         } catch (e) {}
         console.log(`  ✅ IP rotation complete — continue...\n`);
+        processedSinceRotation = 0; // Reset counter
       } catch (rotErr) {
         console.log(`  ⚠️  IP rotation fail hua: ${rotErr.message} — continue kar raha hoon`);
       }
