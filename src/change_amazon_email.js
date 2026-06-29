@@ -1030,7 +1030,8 @@ async function processEmailChange(email, targetEmail, amazonPassword, loginImapC
 
     // 2. Go to homepage
     console.log("    🌐 Navigating to Amazon.in...");
-    await page.goto("https://www.amazon.in", { waitUntil: "networkidle2", timeout: 90000 });
+    await page.goto("https://www.amazon.in", { waitUntil: "domcontentloaded", timeout: 90000 });
+    await page.waitForSelector("#nav-link-accountList", { timeout: 10000 }).catch(() => {});
     await checkForCaptcha(page, startHeadless);
 
     // 3. Click sign-in if not logged in
@@ -1042,13 +1043,13 @@ async function processEmailChange(email, targetEmail, amazonPassword, loginImapC
     if (!isLoggedIn) {
       console.log("    ➡️ Clicking Sign In button...");
       await page.click("#nav-link-accountList").catch(() => {});
-      await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 20000 }).catch(() => {});
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {});
       await runLoginFlowIfNeeded(page, email, amazonPassword, loginImapConfig, startHeadless);
     }
 
     // 4. Navigate to Your Account page to dynamically find the Login & Security link
     console.log("    🌐 Navigating to Your Account homepage...");
-    await page.goto("https://www.amazon.in/gp/css/homepage.html", { waitUntil: "networkidle2", timeout: 90000 });
+    await page.goto("https://www.amazon.in/gp/css/homepage.html", { waitUntil: "domcontentloaded", timeout: 90000 });
     await runLoginFlowIfNeeded(page, email, amazonPassword, loginImapConfig, startHeadless);
 
     console.log("    🔍 Searching for Login & Security link...");
@@ -1078,7 +1079,7 @@ async function processEmailChange(email, targetEmail, amazonPassword, loginImapC
     }
 
     console.log(`    🌐 Navigating to Login & Security page...`);
-    await page.goto(targetSecurityUrl, { waitUntil: "networkidle2", timeout: 90000 });
+    await page.goto(targetSecurityUrl, { waitUntil: "domcontentloaded", timeout: 90000 });
     await runLoginFlowIfNeeded(page, email, amazonPassword, loginImapConfig, startHeadless);
 
     // 5. Wait for and click Edit Email button
@@ -1104,7 +1105,7 @@ async function processEmailChange(email, targetEmail, amazonPassword, loginImapC
     }
     console.log("    ➡️ Clicking Edit Email button...");
     await page.click("#auth-cnep-edit-email-button");
-    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 20000 }).catch(() => {});
+    await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {});
     await runLoginFlowIfNeeded(page, email, amazonPassword, loginImapConfig, startHeadless);
 
     // 6. Enter new email
@@ -1171,7 +1172,7 @@ async function processEmailChange(email, targetEmail, amazonPassword, loginImapC
       page.waitForSelector("#cvf-submit-otp-button", { visible: true, timeout: 5000 }).then(() => "#cvf-submit-otp-button")
     ]);
     await safeClick(page, continueBtnSelector, "Clicked continue email change");
-    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 20000 }).catch(() => {});
+    await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {});
 
     // 7. Input email change OTP (sent to new email targetEmail)
     console.log("    ⏳ Waiting for OTP screen for new email...");
@@ -1246,7 +1247,7 @@ async function processEmailChange(email, targetEmail, amazonPassword, loginImapC
     
     // Wait for page to settle after clicking verify
     await new Promise(r => setTimeout(r, 2000));
-    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 15000 }).catch(() => {});
+    await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
     
     const afterVerifyUrl = page.url();
     console.log(`    📍 URL after verify click: ${afterVerifyUrl}`);
@@ -1317,7 +1318,7 @@ async function processEmailChange(email, targetEmail, amazonPassword, loginImapC
           await page.click("#a-autoid-0-announce").catch(() => {});
         } catch(e) {}
         
-        await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 20000 }).catch(() => {});
+        await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {});
         console.log(`    📍 URL after Save Changes: ${page.url()}`);
         
         const stillOnConfirm = await page.evaluate(() => {
