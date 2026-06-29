@@ -120,10 +120,19 @@ function isEmailTargetedTo(msg, targetEmail) {
   if (!targetEmail) return true;
   const normalizedTarget = targetEmail.toLowerCase().trim();
 
+  // Also build base email without +alias (Gmail strips +alias in delivery headers)
+  // e.g. mariyasmithh70+19@gmail.com → mariyasmithh70@gmail.com
+  let baseEmail = normalizedTarget;
+  const atIdx = normalizedTarget.indexOf('@');
+  const plusIdx = normalizedTarget.indexOf('+');
+  if (plusIdx !== -1 && atIdx !== -1 && plusIdx < atIdx) {
+    baseEmail = normalizedTarget.substring(0, plusIdx) + normalizedTarget.substring(atIdx);
+  }
+
   // Check raw source first for maximum reliability on sub-addresses (aliases)
   if (msg.source) {
     const rawEmailStr = msg.source.toString().toLowerCase();
-    if (rawEmailStr.includes(normalizedTarget)) {
+    if (rawEmailStr.includes(normalizedTarget) || rawEmailStr.includes(baseEmail)) {
       return true;
     }
   }
@@ -133,7 +142,7 @@ function isEmailTargetedTo(msg, targetEmail) {
   for (const addr of envelopeTo) {
     if (addr.address) {
       const emailPart = addr.address.toLowerCase().trim();
-      if (emailPart === normalizedTarget || emailPart.includes(normalizedTarget)) {
+      if (emailPart === normalizedTarget || emailPart === baseEmail || emailPart.includes(normalizedTarget) || emailPart.includes(baseEmail)) {
         return true;
       }
     }
@@ -144,7 +153,7 @@ function isEmailTargetedTo(msg, targetEmail) {
   for (const addr of envelopeCc) {
     if (addr.address) {
       const emailPart = addr.address.toLowerCase().trim();
-      if (emailPart === normalizedTarget || emailPart.includes(normalizedTarget)) {
+      if (emailPart === normalizedTarget || emailPart === baseEmail || emailPart.includes(normalizedTarget) || emailPart.includes(baseEmail)) {
         return true;
       }
     }
@@ -163,7 +172,7 @@ function isEmailTargetedTo(msg, targetEmail) {
         lowerLine.startsWith("x-original-to:") ||
         lowerLine.startsWith("envelope-to:")
       ) {
-        if (lowerLine.includes(normalizedTarget)) {
+        if (lowerLine.includes(normalizedTarget) || lowerLine.includes(baseEmail)) {
           return true;
         }
       }
@@ -480,43 +489,58 @@ async function pollForAmazonApprovalLink(imapConfig, targetEmail, timeoutMs = 12
 
 // ==================== CAPTCHA DETECTOR ====================
 async function checkForCaptcha(page, startHeadless) {
-  const captchaDetected = await page.evaluate(() => {
-    const url = window.location.href.toLowerCase();
-    
-    // If there is an active OTP input field visible, it's not a captcha challenge
-    const otpSelectors = [
-      "#input-box-otp", "#auth-mfa-otpcode", "#cvf-widget-input-code", "#cvf-input-code",
-      "input[name='otpCode']", "input[name='code']", "input#cvf-a-input", "#cvf-otp-input", ".cvf-widget-input-code"
-    ];
-    for (const sel of otpSelectors) {
-      const el = document.querySelector(sel);
-      if (el && el.offsetParent !== null) {
-        return false;
-      }
-    }
+  let captchaDetected = false;
+  let retries = 5;
+  while (retries > 0) {
+    try {
+      captchaDetected = await page.evaluate(() => {
+        const url = window.location.href.toLowerCase();
+        
+        // If there is an active OTP input field visible, it's not a captcha challenge
+        const otpSelectors = [
+          "#input-box-otp", "#auth-mfa-otpcode", "#cvf-widget-input-code", "#cvf-input-code",
+          "input[name='otpCode']", "input[name='code']", "input#cvf-a-input", "#cvf-otp-input", ".cvf-widget-input-code"
+        ];
+        for (const sel of otpSelectors) {
+          const el = document.querySelector(sel);
+          if (el && el.offsetParent !== null) {
+            return false;
+          }
+        }
 
-    if (url.includes("captcha") || url.includes("puzzle")) return "captcha";
-    if (url.includes("/cvf/")) {
-      if (document.querySelector("#cvf-aamation-challenge-iframe") || 
-          document.querySelector(".cvf-aamation-iframe") || 
-          document.querySelector("#cvf-aamation-container iframe") ||
-          document.querySelector("script[src*='awswaf.com']") ||
-          document.querySelector("iframe[src*='awswaf.com']")) {
-        return "captcha";
+        if (url.includes("captcha") || url.includes("puzzle")) return "captcha";
+        if (url.includes("/cvf/")) {
+          if (document.querySelector("#cvf-aamation-challenge-iframe") || 
+              document.querySelector(".cvf-aamation-iframe") || 
+              document.querySelector("#cvf-aamation-container iframe") ||
+              document.querySelector("script[src*='awswaf.com']") ||
+              document.querySelector("iframe[src*='awswaf.com']")) {
+            return "captcha";
+          }
+        }
+        // General WAF Captcha checks
+        if (document.querySelector("script[src*='awswaf.com']") || 
+            document.querySelector("iframe[src*='captcha']") || 
+            document.getElementById("cvf-aamation-container")) {
+          // Confirm it actually loaded captcha content and not just empty div
+          const container = document.getElementById("cvf-aamation-container");
+          if (container && container.innerHTML.trim().length > 0) {
+            return "captcha";
+          }
+        }
+        return false;
+      });
+      break;
+    } catch (err) {
+      if (err.message.includes("Execution context was destroyed") || err.message.includes("navigation")) {
+        console.log("    ⏳ Page is navigating or redirecting, waiting to retry captcha check...");
+        await new Promise(r => setTimeout(r, 1500));
+        retries--;
+      } else {
+        throw err;
       }
     }
-    // General WAF Captcha checks
-    if (document.querySelector("script[src*='awswaf.com']") || 
-        document.querySelector("iframe[src*='captcha']") || 
-        document.getElementById("cvf-aamation-container")) {
-      // Confirm it actually loaded captcha content and not just empty div
-      const container = document.getElementById("cvf-aamation-container");
-      if (container && container.innerHTML.trim().length > 0) {
-        return "captcha";
-      }
-    }
-    return false;
-  });
+  }
 
   if (captchaDetected) {
     console.log("\n⚠️ CAPTCHA/Puzzle detected!");
@@ -549,7 +573,7 @@ async function checkForCaptcha(page, startHeadless) {
             }
           }
           return false;
-        });
+        }).catch(() => true);
         if (!stillCaptcha) {
           console.log("✅ Captcha cleared. Resuming automation...");
           break;
@@ -1378,13 +1402,6 @@ async function processEmailChange(email, targetEmail, amazonPassword, loginImapC
 
 // ==================== MAIN RUNNER ====================
 async function main() {
-  const catTxtPath = path.join(__dirname, "..", "change", "cat.txt");
-  
-  if (!fs.existsSync(catTxtPath)) {
-    console.error(`❌ Error: ${catTxtPath} does not exist.`);
-    process.exit(1);
-  }
-
   // Parse CLI args to get --user-id
   const argsTemp = process.argv.slice(2);
   const userIdxTemp = argsTemp.indexOf("--user-id");
@@ -1456,27 +1473,53 @@ async function main() {
     process.exit(1);
   }
 
-  const content = fs.readFileSync(catTxtPath, "utf8");
-  const lines = content.split(/\r?\n/);
+  // CLI Options (loaded early so we can use --unchanged flag for loading accounts)
+  const args = process.argv.slice(2);
+  const useUnchanged = args.includes("--unchanged");
+
   const accounts = [];
 
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) {
-      continue;
+  if (useUnchanged) {
+    // Load emails directly from change/unchanged.json (array of gmail addresses)
+    const unchangedPath = path.join(__dirname, "..", "change", "unchanged.json");
+    if (!fs.existsSync(unchangedPath)) {
+      console.error(`❌ Error: ${unchangedPath} does not exist.`);
+      process.exit(1);
     }
-    if (trimmed.includes("@")) {
-      const gmail = trimmed;
+    console.log(`📂 --unchanged flag detected. Loading emails from: ${unchangedPath}`);
+    const unchangedEmails = JSON.parse(fs.readFileSync(unchangedPath, "utf8"));
+    for (const gmail of unchangedEmails) {
+      const trimmed = gmail.trim();
+      if (!trimmed || !trimmed.includes("@")) continue;
       const kanuvk = trimmed.replace(/\+/, "").replace(/@gmail\.com$/i, "@kanuvk.com");
-      accounts.push({ gmail, kanuvk });
+      accounts.push({ gmail: trimmed, kanuvk });
     }
+    console.log(`📋 Loaded ${accounts.length} accounts from unchanged.json (skipping status-file filter).`);
+  } else {
+    const catTxtPath = path.join(__dirname, "..", "change", "cat.txt");
+    if (!fs.existsSync(catTxtPath)) {
+      console.error(`❌ Error: ${catTxtPath} does not exist.`);
+      process.exit(1);
+    }
+    const content = fs.readFileSync(catTxtPath, "utf8");
+    const lines = content.split(/\r?\n/);
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      if (trimmed.includes("@")) {
+        const gmail = trimmed;
+        const kanuvk = trimmed.replace(/\+/, "").replace(/@gmail\.com$/i, "@kanuvk.com");
+        accounts.push({ gmail, kanuvk });
+      }
+    }
+    console.log(`📋 Loaded ${accounts.length} accounts from cat.txt.`);
   }
 
-  console.log(`📋 Loaded ${accounts.length} accounts to convert.`);
-  
   const status = getChangedStatus();
+  // When using --unchanged, still skip already-done ones to be safe
   const pendingAccounts = accounts.filter(acc => !status[acc.gmail.toLowerCase()]);
-  
+
   console.log(`🔄 Already processed : ${accounts.length - pendingAccounts.length}`);
   console.log(`🔄 Pending conversion : ${pendingAccounts.length}\n`);
 
@@ -1485,8 +1528,7 @@ async function main() {
     process.exit(0);
   }
 
-  // CLI Options
-  const args = process.argv.slice(2);
+  // Browser mode (args already parsed above)
   const startHeadless = args.includes("--headless") || !args.includes("--browser");
 
   // CLI Option for range: e.g. --range 1-20

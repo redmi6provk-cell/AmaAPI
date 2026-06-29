@@ -273,60 +273,75 @@ async function handleOtpInput(page, selector, imapConfig, targetEmail) {
 
 // ==================== CAPTCHA DETECTOR ====================
 async function checkForCaptcha(page, startHeadless) {
-  const captchaDetected = await page.evaluate(() => {
-    const url = window.location.href.toLowerCase();
-    
-    // If there is an active OTP input field visible, it's not a captcha challenge
-    const otpSelectors = [
-      "#input-box-otp",
-      "#auth-mfa-otpcode",
-      "#cvf-widget-input-code",
-      "#cvf-input-code",
-      "input[name='otpCode']",
-      "input[name='code']",
-      "input#cvf-a-input",
-      "#cvf-otp-input",
-      ".cvf-widget-input-code"
-    ];
-    for (const sel of otpSelectors) {
-      const el = document.querySelector(sel);
-      if (el && el.offsetParent !== null) {
+  let captchaDetected = false;
+  let retries = 5;
+  while (retries > 0) {
+    try {
+      captchaDetected = await page.evaluate(() => {
+        const url = window.location.href.toLowerCase();
+        
+        // If there is an active OTP input field visible, it's not a captcha challenge
+        const otpSelectors = [
+          "#input-box-otp",
+          "#auth-mfa-otpcode",
+          "#cvf-widget-input-code",
+          "#cvf-input-code",
+          "input[name='otpCode']",
+          "input[name='code']",
+          "input#cvf-a-input",
+          "#cvf-otp-input",
+          ".cvf-widget-input-code"
+        ];
+        for (const sel of otpSelectors) {
+          const el = document.querySelector(sel);
+          if (el && el.offsetParent !== null) {
+            return false;
+          }
+        }
+
+        if (url.includes("captcha") || url.includes("puzzle")) return "captcha";
+        if (url.includes("/cvf/")) {
+          if (document.querySelector("#cvf-aamation-challenge-iframe") || document.querySelector(".cvf-aamation-iframe")) return "captcha";
+          if (document.querySelector("iframe[title*='verification']")) return "captcha";
+          const text = document.body ? (document.body.innerText || "") : "";
+          if (text.includes("characters you see below") || text.includes("Solve this puzzle") || text.includes("verification puzzle")) return "captcha";
+          return "captcha";
+        }
+        if (document.querySelector("input[placeholder='Type characters']")) return "captcha";
+        if (document.querySelector("#cvf-aamation-challenge-iframe") || document.querySelector(".cvf-aamation-iframe")) return "captcha";
+        if (document.querySelector("iframe[title*='verification']")) return "captcha";
+        if (document.title && document.title.toLowerCase().includes("authentication required")) return "captcha";
+        const text = document.body ? (document.body.innerText || "") : "";
+        if (text.includes("characters you see below") || text.includes("Solve this puzzle") || text.includes("verification puzzle")) return "captcha";
+        
+        // Check for "Password reset required" or "New to Amazon" registration redirects
+        if (
+          text.includes("Password reset required") ||
+          text.includes("Choose a new password") ||
+          text.includes("Please set a new password") ||
+          text.includes("It looks like you are new to Amazon") ||
+          text.includes("create an account using your mobile number") ||
+          text.includes("Proceed to create an account") ||
+          url.includes("forgotpassword") ||
+          url.includes("resetpassword") ||
+          url.includes("reset-password")
+        ) {
+          return "reset_required";
+        }
+        
         return false;
+      });
+      break;
+    } catch (err) {
+      if (err.message.includes("Execution context was destroyed") || err.message.includes("navigation")) {
+        console.log("    ⏳ Page is navigating or redirecting, waiting to retry captcha check...");
+        await new Promise(r => setTimeout(r, 1500));
+        retries--;
+      } else {
+        throw err;
       }
     }
-
-    if (url.includes("captcha") || url.includes("puzzle")) return "captcha";
-    if (url.includes("/cvf/")) {
-      if (document.querySelector("#cvf-aamation-challenge-iframe") || document.querySelector(".cvf-aamation-iframe")) return "captcha";
-      if (document.querySelector("iframe[title*='verification']")) return "captcha";
-      const text = document.body ? (document.body.innerText || "") : "";
-      if (text.includes("characters you see below") || text.includes("Solve this puzzle") || text.includes("verification puzzle")) return "captcha";
-      return "captcha";
-    }
-    if (document.querySelector("input[placeholder='Type characters']")) return "captcha";
-    if (document.querySelector("#cvf-aamation-challenge-iframe") || document.querySelector(".cvf-aamation-iframe")) return "captcha";
-    if (document.querySelector("iframe[title*='verification']")) return "captcha";
-    if (document.title && document.title.toLowerCase().includes("authentication required")) return "captcha";
-    const text = document.body ? (document.body.innerText || "") : "";
-    if (text.includes("characters you see below") || text.includes("Solve this puzzle") || text.includes("verification puzzle")) return "captcha";
-    
-    // Check for "Password reset required" or "New to Amazon" registration redirects
-    if (
-      text.includes("Password reset required") ||
-      text.includes("Choose a new password") ||
-      text.includes("Please set a new password") ||
-      text.includes("It looks like you are new to Amazon") ||
-      text.includes("create an account using your mobile number") ||
-      text.includes("Proceed to create an account") ||
-      url.includes("forgotpassword") ||
-      url.includes("resetpassword") ||
-      url.includes("reset-password")
-    ) {
-      return "reset_required";
-    }
-    
-    return false;
-  });
+  }
 
   if (captchaDetected === "reset_required") {
     throw new Error("PASSWORD_RESET_REQUIRED");
@@ -376,7 +391,7 @@ async function checkForCaptcha(page, startHeadless) {
           const text = document.body ? (document.body.innerText || "") : "";
           if (text.includes("characters you see below") || text.includes("Solve this puzzle") || text.includes("verification puzzle")) return true;
           return false;
-        });
+        }).catch(() => true);
         if (!stillCaptcha) break;
       } catch (e) {
         break; // If evaluation fails, break loop
