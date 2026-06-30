@@ -783,7 +783,16 @@ async function runFullBrowserCheckout(email, confirm, minPrice, maxPrice, headle
           }
 
           // Handle Payment page
-          const isPaymentPage = content.includes("ppw-instrumentRowSelection") || currentUrl.includes("/pay");
+          // IMPORTANT: Check for SPC/place-order content FIRST (before payment page check)
+          // because Amazon's new SPA checkout keeps the same /pay URL for both payment
+          // selection AND the final place-order review page.
+          const hasSpcContent = content.includes("placeYourOrder1") ||
+                                content.includes("place-order") ||
+                                content.includes("submitOrderButton") ||
+                                await currentPage.$('input[name="placeYourOrder1"]').then(el => !!el).catch(() => false) ||
+                                await currentPage.$('#submitOrderButton').then(el => !!el).catch(() => false);
+
+          const isPaymentPage = (content.includes("ppw-instrumentRowSelection") || currentUrl.includes("/pay")) && !hasSpcContent;
           if (isPaymentPage && !currentUrl.includes("/spc")) {
             console.log("Payment options page detected. Selecting Cash on Delivery...");
             const codSelected = await currentPage.evaluate(() => {
@@ -813,7 +822,7 @@ async function runFullBrowserCheckout(email, confirm, minPrice, maxPrice, headle
               throw new Error("COD_DISABLED");
             }
 
-            await new Promise(r => setTimeout(r, 2000));
+            await new Promise(r => setTimeout(r, 1500));
 
             console.log("Clicking Continue button...");
             const clickedContinue = await currentPage.evaluate(() => {
@@ -829,9 +838,14 @@ async function runFullBrowserCheckout(email, confirm, minPrice, maxPrice, headle
             });
 
             if (clickedContinue) {
-              console.log("Clicked Continue. Waiting for navigation...");
-              await currentPage.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 }).catch(() => {});
-              await new Promise(r => setTimeout(r, 2000));
+              console.log("Clicked Continue. Waiting for SPC/place-order page to load...");
+              // Amazon SPA checkout: URL stays same (/pay), only DOM changes.
+              // Wait for place-order button OR navigation — whichever comes first.
+              await Promise.race([
+                currentPage.waitForSelector('input[name="placeYourOrder1"], #submitOrderButton, input[name="placeYourOrder1"]', { timeout: 20000 }).catch(() => {}),
+                currentPage.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {})
+              ]);
+              await new Promise(r => setTimeout(r, 1500));
             } else {
               console.warn("Continue button not found. Waiting...");
               await new Promise(r => setTimeout(r, 5000));
@@ -840,10 +854,8 @@ async function runFullBrowserCheckout(email, confirm, minPrice, maxPrice, headle
           }
 
           // Handle SPC (Place Order Review) page
-          const isSpcPage = currentUrl.includes("/spc") || 
-                            content.includes("place-order") || 
-                            content.includes("placeYourOrder1") ||
-                            await currentPage.$('input[name="placeYourOrder1"]') !== null;
+          // Note: hasSpcContent already evaluated above — reuse it here.
+          const isSpcPage = currentUrl.includes("/spc") || hasSpcContent;
           if (isSpcPage) {
             console.log("SPC/Review page reached. Extracting order total...");
             orderTotal = await currentPage.evaluate(() => {
@@ -1186,7 +1198,8 @@ async function runPayOnDeliveryCheckout(email, confirm, headless = false) {
       // Robust detection of selected payment method in SPC page
       let payText = "";
       const selectedPaymentMatch = pageHtml.match(/id=["']selected-payment-instrument-name["'][^>]*>([\s\S]*?)<\/span>/i) ||
-                                  pageHtml.match(/class=["'][^"']*pmts-instrument-display-name[^"']*["'][^>]*>([\s\S]*?)<\/span>/i);
+                                  pageHtml.match(/class=["'][^"']*pmts-instrument-display-name[^"']*["'][^>]*>([\s\S]*?)<\/span>/i) ||
+                                  pageHtml.match(/id=["']payment-option-text-default["'][^>]*>([\s\S]*?)<\/h2>/i);
       
       if (selectedPaymentMatch) {
         payText = selectedPaymentMatch[1].replace(/<[^>]*>/g, "").trim();
@@ -1196,7 +1209,9 @@ async function runPayOnDeliveryCheckout(email, confirm, headless = false) {
         const codSpan = allSpans.find(m => {
           const txt = m[1].replace(/<[^>]*>/g, "").trim().toLowerCase();
           return (txt === "pay on delivery" || txt === "cash on delivery" || txt === "cod" || 
-                  txt === "pay on delivery (cod)" || txt === "cash on delivery (cod)");
+                  txt === "pay on delivery (cod)" || txt === "cash on delivery (cod)" ||
+                  txt === "pay on delivery (cash/card)" || txt === "pay on delivery (cash / card)" ||
+                  txt === "cash on delivery (cash/card)" || txt === "cash on delivery (cash / card)");
         });
         if (codSpan) {
           payText = codSpan[1].replace(/<[^>]*>/g, "").trim();
