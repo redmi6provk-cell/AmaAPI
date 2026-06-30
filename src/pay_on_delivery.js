@@ -1410,8 +1410,20 @@ Options:
         currentIp = ipRes.data.ip || 'UNKNOWN';
       } catch (_) {}
 
-      // 3. Log to sheet
-      await googleSheets.appendOrderRow(email, 'SUCCESS', result.orderId, result.orderTotal || 'UNKNOWN', productsStr, '', currentIp);
+      // 3. Get name from address_input.json
+      let addressName = '';
+      const addressInputPath = path.join(__dirname, '..', 'config', 'address_input.json');
+      if (fs.existsSync(addressInputPath)) {
+        try {
+          const addressInput = JSON.parse(fs.readFileSync(addressInputPath, 'utf8'));
+          if (addressInput.fullName) {
+            addressName = addressInput.fullName.trim();
+          }
+        } catch (e) {}
+      }
+
+      // 4. Log to sheet
+      await googleSheets.appendOrderRow(email, 'SUCCESS', result.orderId, result.orderTotal || 'UNKNOWN', productsStr, '', currentIp, addressName);
     }
 
     process.exit(0);

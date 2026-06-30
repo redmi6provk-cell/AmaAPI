@@ -75,7 +75,7 @@ async function getSheetId(sheets, sheetName = 'Sheet1') {
 async function getSheetValues(sheets) {
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: 'Sheet1!A:H', // A=Timestamp, B=Email, C=Status, D=Order ID, E=Total Amount, F=Product ASIN/Qty, G=Reason, H=IP
+    range: 'Sheet1!A:I', // A=Timestamp, B=Email, C=Status, D=Order ID, E=Total Amount, F=Product ASIN/Qty, G=Reason, H=IP, I=Name
   });
   return response.data.values || [];
 }
@@ -85,10 +85,10 @@ async function ensureHeaders(sheets) {
   try {
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: 'Sheet1!A1:H1',
+      range: 'Sheet1!A1:I1',
     });
     const headerRow = response.data.values || [];
-    if (headerRow.length === 0 || !headerRow[0] || headerRow[0].length === 0) {
+    if (headerRow.length === 0 || !headerRow[0] || headerRow[0].length < 9) {
       const headers = [[
         'Timestamp',
         'Email',
@@ -97,15 +97,16 @@ async function ensureHeaders(sheets) {
         'Total Amount',
         'Product ASIN / Qty',
         'Reason / Error',
-        'IP Address'
+        'IP Address',
+        'Name'
       ]];
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: 'Sheet1!A1:H1',
+        range: 'Sheet1!A1:I1',
         valueInputOption: 'USER_ENTERED',
         resource: { values: headers }
       });
-      console.log("📊 Google Sheets: Created header row.");
+      console.log("📊 Google Sheets: Created/Updated header row with Column I.");
     }
   } catch (e) {
     console.error("❌ Google Sheets: Failed to ensure headers:", e.message);
@@ -113,7 +114,7 @@ async function ensureHeaders(sheets) {
 }
 
 // 1. Append a new placed order (SUCCESS)
-async function appendOrderRow(email, status, orderId, totalAmount, productsStr, reason = '', ipAddress = '') {
+async function appendOrderRow(email, status, orderId, totalAmount, productsStr, reason = '', ipAddress = '', addressName = '') {
   const sheets = getSheetsClient();
   if (!sheets) return;
 
@@ -128,13 +129,14 @@ async function appendOrderRow(email, status, orderId, totalAmount, productsStr, 
     totalAmount,
     productsStr,
     reason,
-    ipAddress
+    ipAddress,
+    addressName
   ]];
 
   try {
     await withRetry(() => sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: 'Sheet1!A:H',
+      range: 'Sheet1!A:I',
       valueInputOption: 'USER_ENTERED',
       resource: { values },
     }));
@@ -224,7 +226,7 @@ async function updateAccountStatus(email, status, reason = '') {
 
     if (matchedIndex !== -1) {
       // Update existing row
-      const range = `Sheet1!A${matchedIndex + 1}:H${matchedIndex + 1}`;
+      const range = `Sheet1!A${matchedIndex + 1}:I${matchedIndex + 1}`;
       const values = [[
         timestamp,
         email,
@@ -233,7 +235,8 @@ async function updateAccountStatus(email, status, reason = '') {
         rows[matchedIndex][4] || '', // keep totalAmount
         rows[matchedIndex][5] || '', // keep products
         reason,
-        rows[matchedIndex][7] || ''  // keep IP
+        rows[matchedIndex][7] || '', // keep IP
+        rows[matchedIndex][8] || ''  // keep Name
       ]];
 
       await withRetry(() => sheets.spreadsheets.values.update({
@@ -245,7 +248,7 @@ async function updateAccountStatus(email, status, reason = '') {
       console.log(`📊 Google Sheets: Updated status to ${status} for ${email}`);
     } else {
       // Append a new row if not found
-      await appendOrderRow(email, status, '', '', '', reason, '');
+      await appendOrderRow(email, status, '', '', '', reason, '', '');
     }
   } catch (e) {
     console.error("❌ Google Sheets: Failed to update status:", e.message);
@@ -288,7 +291,7 @@ async function updateOrderStatus(email, orderId, status, reason = '') {
     const timestamp = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
     if (matchedIndex !== -1) {
-      const range = `Sheet1!A${matchedIndex + 1}:H${matchedIndex + 1}`;
+      const range = `Sheet1!A${matchedIndex + 1}:I${matchedIndex + 1}`;
       const values = [[
         timestamp,
         email,
@@ -297,7 +300,8 @@ async function updateOrderStatus(email, orderId, status, reason = '') {
         rows[matchedIndex][4] || '',
         rows[matchedIndex][5] || '',
         reason,
-        rows[matchedIndex][7] || ''
+        rows[matchedIndex][7] || '',
+        rows[matchedIndex][8] || ''
       ]];
 
       await withRetry(() => sheets.spreadsheets.values.update({
@@ -309,7 +313,7 @@ async function updateOrderStatus(email, orderId, status, reason = '') {
       console.log(`📊 Google Sheets: Updated status to ${status} for Email: ${email}, Order ID: ${orderId}`);
     } else {
       // Append a new row if not found
-      await appendOrderRow(email, status, orderId || '', '', '', reason, '');
+      await appendOrderRow(email, status, orderId || '', '', '', reason, '', '');
     }
   } catch (e) {
     console.error("❌ Google Sheets: Failed to update order status:", e.message);
