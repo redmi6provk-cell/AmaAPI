@@ -39,6 +39,27 @@ function getSheetsClient() {
   }
 }
 
+// ── Retry helper: handles Google Sheets rate limits (429) from multiple PCs ──
+async function withRetry(fn, maxRetries = 5) {
+  let delay = 2000;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      const isRateLimit = e?.code === 429 || e?.status === 429 ||
+                          (e?.message && (e.message.includes('429') || e.message.includes('Quota') || e.message.includes('rate')));
+      const isServerErr = e?.code === 503 || e?.status === 503;
+      if ((isRateLimit || isServerErr) && attempt < maxRetries) {
+        console.warn(`⚠️ Google Sheets rate limit hit. Retrying in ${delay/1000}s... (attempt ${attempt}/${maxRetries})`);
+        await new Promise(r => setTimeout(r, delay));
+        delay = Math.min(delay * 2, 30000); // exponential backoff, max 30s
+      } else {
+        throw e;
+      }
+    }
+  }
+}
+
 // Helper to get Sheet ID dynamically by name (defaults to 'Sheet1')
 async function getSheetId(sheets, sheetName = 'Sheet1') {
   try {
@@ -111,15 +132,15 @@ async function appendOrderRow(email, status, orderId, totalAmount, productsStr, 
   ]];
 
   try {
-    await sheets.spreadsheets.values.append({
+    await withRetry(() => sheets.spreadsheets.values.append({
       spreadsheetId,
       range: 'Sheet1!A:H',
       valueInputOption: 'USER_ENTERED',
       resource: { values },
-    });
+    }));
     console.log(`📊 Google Sheets: Appended row for ${email} with status ${status}`);
   } catch (e) {
-    console.error("❌ Google Sheets: Failed to append row:", e.message);
+    console.error("❌ Google Sheets: Failed to append row after retries:", e.message);
   }
 }
 
@@ -169,10 +190,10 @@ async function deleteOrderRow(email, orderId) {
       }
     }));
 
-    await sheets.spreadsheets.batchUpdate({
+    await withRetry(() => sheets.spreadsheets.batchUpdate({
       spreadsheetId,
       resource: { requests }
-    });
+    }));
 
     console.log(`📊 Google Sheets: Deleted ${indicesToDelete.length} row(s) for Email: ${email}, Order ID: ${orderId}`);
   } catch (e) {
@@ -215,12 +236,12 @@ async function updateAccountStatus(email, status, reason = '') {
         rows[matchedIndex][7] || ''  // keep IP
       ]];
 
-      await sheets.spreadsheets.values.update({
+      await withRetry(() => sheets.spreadsheets.values.update({
         spreadsheetId,
         range,
         valueInputOption: 'USER_ENTERED',
         resource: { values }
-      });
+      }));
       console.log(`📊 Google Sheets: Updated status to ${status} for ${email}`);
     } else {
       // Append a new row if not found
@@ -279,12 +300,12 @@ async function updateOrderStatus(email, orderId, status, reason = '') {
         rows[matchedIndex][7] || ''
       ]];
 
-      await sheets.spreadsheets.values.update({
+      await withRetry(() => sheets.spreadsheets.values.update({
         spreadsheetId,
         range,
         valueInputOption: 'USER_ENTERED',
         resource: { values }
-      });
+      }));
       console.log(`📊 Google Sheets: Updated status to ${status} for Email: ${email}, Order ID: ${orderId}`);
     } else {
       // Append a new row if not found
