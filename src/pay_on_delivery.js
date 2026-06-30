@@ -1410,14 +1410,15 @@ Options:
         currentIp = ipRes.data.ip || 'UNKNOWN';
       } catch (_) {}
 
-      // 3. Get name from address_input.json
+      // 3. Get name from address_input.json (only the last word, e.g., "Jalaram")
       let addressName = '';
       const addressInputPath = path.join(__dirname, '..', 'config', 'address_input.json');
       if (fs.existsSync(addressInputPath)) {
         try {
           const addressInput = JSON.parse(fs.readFileSync(addressInputPath, 'utf8'));
           if (addressInput.fullName) {
-            addressName = addressInput.fullName.trim();
+            const parts = addressInput.fullName.trim().split(/\s+/);
+            addressName = parts[parts.length - 1] || '';
           }
         } catch (e) {}
       }
